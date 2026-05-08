@@ -44,7 +44,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
-const {useState,useEffect,useRef}=React;
+const {useState,useEffect,useRef,useCallback,memo}=React;
 
 const TPL={
   j1:{name:"Jour 1 – Force & Explosion",lbl:"FORCE",desc:"Lundi · Force maximale",col:"#00e5a0",ex:[
@@ -402,10 +402,7 @@ function HBarSvg({data}){
 function Tag({lbl,col,sm}){
   return<span style={{background:col+"22",color:col,border:"1px solid "+col+"44",borderRadius:4,padding:sm?"1px 6px":"2px 9px",fontSize:sm?10:11,fontWeight:700,letterSpacing:".06em",fontFamily:"Russo One,sans-serif",whiteSpace:"nowrap"}}>{lbl}</span>;
 }
-function PRToast({msg}){
-  if(!msg)return null;
-  return<div className="pr-toast" style={{position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",background:"linear-gradient(135deg,#00e5a0,#00b07d)",color:"#000",borderRadius:20,padding:"10px 20px",fontSize:14,fontWeight:700,fontFamily:"Russo One,sans-serif",letterSpacing:".06em",zIndex:300,boxShadow:"0 8px 32px #00e5a044",whiteSpace:"nowrap"}}>🏆 PR — {msg}</div>;
-}
+/* PRToast defined below */
 
 function ExPicker({selected,setSelected,customEx,onSaveCustomEx,accentCol}){
   const col=accentCol||"#00e5a0";
@@ -685,7 +682,18 @@ function SessionSelect({sessions,cfg,progs,onStart,onFree,onNewProg,onEditProg,o
     <div style={{paddingBottom:80}}>
       <div style={{padding:"20px 18px 8px"}}>
         <div style={{fontSize:11,color:"var(--t3)",letterSpacing:".1em",marginBottom:4,textTransform:"uppercase"}}>{today}</div>
-        <h1 className="R" style={{fontSize:26,lineHeight:1.1}}>QUELLE SÉANCE ?</h1>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <h1 className="R" style={{fontSize:26,lineHeight:1.1}}>QUELLE SÉANCE ?</h1>
+          {(()=>{const s=quickStreak(sessions);return s>0?(
+            <div style={{display:"flex",alignItems:"center",gap:5,background:"#f9731622",border:"1px solid #f9731644",borderRadius:10,padding:"5px 10px"}}>
+              <span style={{fontSize:16}}>🔥</span>
+              <div>
+                <div className="M" style={{fontSize:14,fontWeight:700,color:"#f97316",lineHeight:1}}>{s}</div>
+                <div style={{fontSize:8,color:"var(--t3)"}}>sem.</div>
+              </div>
+            </div>
+          ):null;})()}
+        </div>
       </div>
       <div style={{padding:"10px 16px",display:"flex",flexDirection:"column",gap:10}}>
         {Object.entries(allProgs).map(([id,t])=>{
@@ -1571,6 +1579,47 @@ function HistoryTab({sessions,cfg,progs,onDelete}){
 
 
 
+/* ── Module-level: no inner components = no flicker on re-render ── */
+
+/* ══ SESSION COMPONENTS v7 ══ */
+
+/* Streak helper (lightweight, for SessionSelect) */
+function quickStreak(sessions){
+  if(!sessions||!sessions.length)return 0;
+  const today=new Date().toISOString().split("T")[0];
+  const wkCount={};
+  sessions.forEach(s=>{const w=weekStart(s.date);wkCount[w]=(wkCount[w]||0)+1;});
+  let count=0,wk=weekStart(today);
+  for(let i=0;i<52;i++){
+    if((wkCount[wk]||0)>=2)count++;
+    else if(i>0)break;
+    wk=addDays(wk,-7);
+  }
+  return count;
+}
+
+/* PR Toast — persists until tapped */
+function PRToast({msg,onDismiss}){
+  if(!msg)return null;
+  return(
+    <div onClick={onDismiss} className="pr-toast" style={{
+      position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",
+      background:"linear-gradient(135deg,#00e5a0,#00b07d)",color:"#000",
+      borderRadius:20,padding:"10px 20px 10px 16px",fontSize:14,fontWeight:700,
+      fontFamily:"Russo One,sans-serif",letterSpacing:".06em",
+      zIndex:300,boxShadow:"0 8px 32px #00e5a044",
+      display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+      whiteSpace:"nowrap",animationFillMode:"none",animation:"none",
+      opacity:1,transform:"translateX(-50%) translateY(0)",
+    }}>
+      <span style={{fontSize:20}}>🏆</span>
+      <span>PR — {msg}</span>
+      <span style={{fontSize:16,opacity:.7}}>✕</span>
+    </div>
+  );
+}
+
+/* Session Timer */
 function SessionTimer({startTime,col}){
   const [e,setE]=useState(Math.round((Date.now()-startTime)/1000));
   useEffect(()=>{
@@ -1581,147 +1630,259 @@ function SessionTimer({startTime,col}){
   return<span className="M" style={{fontSize:22,fontWeight:700,color:col}}>{mm}:{ss}</span>;
 }
 
-function IntensityBadge({score, compact}){
-  const m = intensityMeta(score);
-  if(score === null) return null;
-  if(compact){
-    return(
-      <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-        <div style={{width:32,height:5,background:"var(--bd)",borderRadius:3,overflow:"hidden"}}>
-          <div style={{height:"100%",width:score+"%",background:m.col,borderRadius:3,transition:"width .5s"}}/>
-        </div>
-        <span className="M" style={{fontSize:10,fontWeight:700,color:m.col}}>{score}%</span>
-      </div>
-    );
+/* Set Row — module-level memo, bigger buttons, RPE separate row, long-press unvalidate, % 1RM */
+const SetRow=memo(function SetRow({xi,si,set,bwEx,step,prevBestW,tcol,histBestRM,isActive,onUpd,onAdjW,onAdjR,onValidate,onUnvalidate,rowRef}){
+  const pressRef=useRef(null);
+  const wAlert=!set.done&&set.w>0&&prevBestW>0&&parseFloat(set.w)<prevBestW;
+  const setRM=(set.w>0&&set.r>=1&&set.r<=10)?oneRM(set.w,set.r):null;
+  const pct1RM=(setRM&&histBestRM>0)?Math.round(setRM/histBestRM*100):null;
+  const rpeCol=["","#00e5a0","#f97316","#f87171"];
+  const rpeLbl=["","Facile","Dur","Max"];
+
+  function startPress(){
+    if(!set.done)return;
+    pressRef.current=setTimeout(()=>{
+      onUnvalidate(xi,si);
+      if(navigator.vibrate)navigator.vibrate(150);
+    },700);
   }
+  function endPress(){clearTimeout(pressRef.current);}
+
+  const mkBtn=(onClick,label,disabled)=>(
+    <button disabled={disabled} onClick={onClick}
+      style={{background:"var(--s3)",border:"none",color:disabled?"var(--bd2)":"var(--t2)",
+        borderRadius:8,width:38,height:42,fontSize:20,flexShrink:0,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        touchAction:"manipulation",cursor:disabled?"default":"pointer"}}>
+      {label}
+    </button>
+  );
+
   return(
-    <div style={{background:"var(--s2)",borderRadius:12,padding:"12px 14px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div>
-          <span style={{background:m.col+"22",color:m.col,border:"1px solid "+m.col+"44",borderRadius:5,padding:"2px 8px",fontSize:11,fontWeight:700,fontFamily:"Russo One,sans-serif"}}>{m.lbl}</span>
-          <div style={{fontSize:11,color:"var(--t2)",marginTop:4}}>{m.desc}</div>
+    <div ref={rowRef} style={{marginBottom:5}}>
+      {/* Main row */}
+      <div style={{display:"grid",
+        gridTemplateColumns:bwEx?"28px 1fr 46px":"28px 1fr 1fr 46px",
+        gap:4,alignItems:"center",
+        background:set.done?"rgba(0,229,160,.08)":isActive?"var(--s2)":"transparent",
+        borderRadius:10,padding:"6px 5px",
+        border:"1px solid "+(set.done?"#00b07d":isActive?"var(--bd2)":"transparent"),
+        transition:"background .2s,border-color .2s"}}>
+        <div className="M" style={{fontSize:12,color:"var(--t3)",fontWeight:700,textAlign:"center"}}>{si+1}</div>
+        {!bwEx&&(
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            {mkBtn(()=>onAdjW(xi,si,-step),"−",set.done)}
+            <input type="number" inputMode="decimal" step={step}
+              value={set.w!=null?set.w:""} disabled={set.done}
+              onChange={e=>onUpd(xi,si,"w",e.target.value)} placeholder="kg"
+              style={{flex:1,background:"var(--s3)",border:"1px solid var(--bd2)",borderRadius:7,padding:"8px 2px",
+                color:"var(--t1)",fontSize:15,fontFamily:"JetBrains Mono,monospace",fontWeight:700,
+                textAlign:"center",minWidth:0,opacity:set.done?.5:1}}/>
+            {mkBtn(()=>onAdjW(xi,si,step),"+",set.done)}
+          </div>
+        )}
+        <div style={{display:"flex",alignItems:"center",gap:3}}>
+          {mkBtn(()=>onAdjR(xi,si,-1),"−",set.done)}
+          <input type="number" inputMode="numeric"
+            value={set.r!=null?set.r:""} disabled={set.done}
+            onChange={e=>onUpd(xi,si,"r",e.target.value)} placeholder="reps"
+            style={{flex:1,background:"var(--s3)",border:"1px solid var(--bd2)",borderRadius:7,padding:"8px 2px",
+              color:"var(--t1)",fontSize:15,fontFamily:"JetBrains Mono,monospace",fontWeight:700,
+              textAlign:"center",minWidth:0,opacity:set.done?.5:1}}/>
+          {mkBtn(()=>onAdjR(xi,si,1),"+",set.done)}
         </div>
-        <span className="M" style={{fontSize:28,fontWeight:700,color:m.col,lineHeight:1}}>{score}<span style={{fontSize:14}}>%</span></span>
+        {/* Validate / long-press unvalidate */}
+        <button
+          onClick={()=>{if(!set.done)onValidate(xi,si);}}
+          onTouchStart={startPress} onTouchEnd={endPress}
+          onMouseDown={startPress} onMouseUp={endPress} onMouseLeave={endPress}
+          title={set.done?"Maintenir pour annuler":"Valider"}
+          style={{background:set.done?tcol+"33":tcol,color:set.done?tcol:"#000",
+            border:set.done?"1px dashed "+tcol+"66":"none",
+            borderRadius:10,height:44,width:44,fontSize:18,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            cursor:"pointer",flexShrink:0,touchAction:"manipulation",
+            transition:"background .15s"}}>
+          {set.done?"✓":"›"}
+        </button>
       </div>
-      <div style={{height:8,background:"var(--bd)",borderRadius:4,overflow:"hidden",marginBottom:6}}>
-        <div style={{height:"100%",width:score+"%",background:"linear-gradient(90deg,#38bdf8,#00e5a0,#f97316,#f87171)",borderRadius:4,transition:"width .8s ease"}}/>
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:"var(--t3)"}}>
-        <span>Récup</span><span>Modéré</span><span>Intense</span><span>Max</span>
-      </div>
+
+      {/* RPE row + % 1RM — visible when active or done */}
+      {(isActive||set.done)&&(
+        <div style={{display:"flex",alignItems:"center",gap:5,paddingLeft:36,marginTop:3,flexWrap:"wrap"}}>
+          {[1,2,3].map(v=>(
+            <button key={v} onClick={()=>onUpd(xi,si,"rpe",set.rpe===v?null:v)}
+              style={{
+                background:set.rpe===v?rpeCol[v]+"22":"var(--s2)",
+                border:"1px solid "+(set.rpe===v?rpeCol[v]+"55":"var(--bd)"),
+                borderRadius:20,padding:"5px 12px",fontSize:13,cursor:"pointer",
+                display:"flex",alignItems:"center",gap:5,transition:"all .15s",
+                touchAction:"manipulation",
+              }}>
+              <span>{["","😌","😤","💀"][v]}</span>
+              <span style={{fontSize:10,color:set.rpe===v?rpeCol[v]:"var(--t3)",fontWeight:600}}>{rpeLbl[v]}</span>
+            </button>
+          ))}
+          {pct1RM&&(
+            <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:3}}>
+              <span className="M" style={{fontSize:12,fontWeight:700,
+                color:pct1RM>=90?"#f87171":pct1RM>=80?"#f97316":"#00e5a0"}}>
+                {pct1RM}%
+              </span>
+              <span style={{fontSize:9,color:"var(--t3)"}}>1RM</span>
+            </div>
+          )}
+          {set.done&&<span style={{fontSize:9,color:"var(--t3)",marginLeft:2}}>↙ maintenir ✓ pour annuler</span>}
+        </div>
+      )}
+      {wAlert&&<div style={{fontSize:10,color:"#f97316",padding:"2px 8px 0"}}>⚠️ Moins que la dernière fois ({prevBestW}kg)</div>}
     </div>
   );
-}
+});
 
-
-function beep(freq=880,dur=0.12,vol=0.25){
-  try{
-    const ctx=new(window.AudioContext||window.webkitAudioContext)();
-    const osc=ctx.createOscillator(),gain=ctx.createGain();
-    osc.connect(gain);gain.connect(ctx.destination);
-    osc.frequency.value=freq;osc.type="sine";
-    gain.gain.setValueAtTime(vol,ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur);
-    osc.start(ctx.currentTime);osc.stop(ctx.currentTime+dur+0.01);
-  }catch(e){}
-}
-
-function RestTimer({timer,onSkip,onAdjust}){
-  if(!timer)return null;
-  const pct=timer.total>0?Math.max(0,timer.sec/timer.total)*100:0;
-  const done=timer.sec<=0;
-  const warn=timer.sec<=10&&!done;
-  const col=done?"#00e5a0":warn?"#f97316":"#38bdf8";
-  const C=2*Math.PI*20;
+/* Exercise Header */
+const ExHeader=memo(function ExHeader({ex,xi,isOpen,onToggle,tcol,stepVal,onStepChange,expandStep,onExpandStep,onSkipEx}){
+  const STEPS=[0.5,1,2.5,5];
+  const exDone=ex.sets.every(s=>s.done||s.skipped);
+  const doneCount=ex.sets.filter(s=>s.done).length;
+  const curRM=bestRM(ex);
   return(
-    <div style={{position:"fixed",bottom:68,left:"50%",transform:"translateX(-50%)",width:"calc(100% - 28px)",maxWidth:452,background:"var(--s3)",border:"1px solid "+col+"66",borderRadius:16,padding:"10px 12px",zIndex:200,boxShadow:"0 8px 32px "+col+"1a"}}>
-      <div style={{display:"flex",alignItems:"center",gap:10}}>
-        {}
-        <div style={{position:"relative",width:48,height:48,flexShrink:0}}>
-          <svg width={48} height={48} style={{position:"absolute",transform:"rotate(-90deg)"}}>
-            <circle cx={24} cy={24} r={20} fill="none" stroke="var(--bd2)" strokeWidth={3}/>
-            <circle cx={24} cy={24} r={20} fill="none" stroke={col} strokeWidth={3} strokeDasharray={C} strokeDashoffset={C*(1-pct/100)} style={{transition:"stroke-dashoffset 1s linear,stroke .3s"}}/>
-          </svg>
-          <span className="M" style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:col}}>{Math.max(0,timer.sec)}</span>
+    <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+      cursor:onToggle?"pointer":"default",touchAction:"manipulation"}}
+      onClick={onToggle||undefined}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+          {(exDone||ex.skipped)&&<span style={{color:ex.skipped?"var(--re)":tcol,fontSize:12}}>{ex.skipped?"⛔":"✓"}</span>}
+          <div style={{fontSize:14,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ex.nm}</div>
+          <span style={{background:(MU_COL[ex.mu]||"#888")+"22",color:MU_COL[ex.mu]||"#888",fontSize:9,padding:"1px 5px",borderRadius:3,fontWeight:700,flexShrink:0}}>{ex.mu}</span>
+          {curRM>0&&<span className="M" style={{fontSize:9,color:"var(--t3)",background:"var(--s2)",padding:"1px 5px",borderRadius:3,flexShrink:0}}>~{curRM}kg</span>}
         </div>
-        {}
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:10,color:"var(--t3)",letterSpacing:".08em"}}>RÉCUPÉRATION</div>
-          <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{done?"C'est parti ! 💪":timer.nm}</div>
-          {timer.nextEx&&!done&&(
-            <div style={{fontSize:10,color:"var(--t3)",marginTop:1}}>
-              Prochain : <span style={{color:"var(--t1)",fontWeight:600}}>{timer.nextEx.nm}</span>
-              {timer.nextPrevW>0&&<span className="M" style={{color:"#00e5a0",fontWeight:700}}> · {timer.nextPrevW}kg</span>}
+        <div style={{fontSize:10,color:"var(--t3)",marginTop:1,display:"flex",gap:5,flexWrap:"wrap"}}>
+          <span>{ex.ns}×{ex.rp}</span>
+          {(ex.rt||0)>0&&<span>· ⏱{fmtD(ex.rt)}</span>}
+        </div>
+      </div>
+      {!ex.bw&&(
+        <div style={{position:"relative"}}>
+          <button onClick={e=>{e.stopPropagation();onExpandStep(expandStep===xi?null:xi);}}
+            style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--t2)",
+              borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,touchAction:"manipulation"}}>
+            ±{stepVal}kg
+          </button>
+          {expandStep===xi&&(
+            <div style={{position:"absolute",right:0,top:"110%",background:"var(--s1)",
+              border:"1px solid var(--bd)",borderRadius:10,padding:"6px",
+              display:"flex",gap:4,zIndex:20,boxShadow:"0 4px 16px rgba(0,0,0,.4)"}}>
+              {STEPS.map(s=>(
+                <button key={s} onClick={e=>{e.stopPropagation();onStepChange(xi,s);}}
+                  style={{background:stepVal===s?tcol+"33":"var(--s2)",
+                    color:stepVal===s?tcol:"var(--t2)",
+                    border:"1px solid "+(stepVal===s?tcol+"44":"var(--bd)"),
+                    borderRadius:7,padding:"7px 10px",fontSize:12,fontWeight:700,
+                    touchAction:"manipulation"}}>
+                  {s}
+                </button>
+              ))}
             </div>
           )}
         </div>
-        {}
-        <button onClick={onSkip} style={{background:col+"22",color:col,border:"1px solid "+col+"44",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,flexShrink:0}}>{done?"OK":"Skip"}</button>
-      </div>
-      {}
-      {!done&&(
-        <div style={{display:"flex",gap:6,marginTop:8,justifyContent:"center"}}>
-          {[-30,-10,10,30].map(d=>(
-            <button key={d} onClick={()=>onAdjust(d)} style={{background:"var(--s2)",border:"1px solid var(--bd)",color:d<0?"#f87171":"#00e5a0",borderRadius:7,padding:"4px 10px",fontSize:12,fontWeight:700,fontFamily:"JetBrains Mono,monospace"}}>
-              {d>0?"+":""}{d}s
-            </button>
-          ))}
-        </div>
       )}
+      {!exDone&&!ex.skipped&&(
+        <button onClick={e=>{e.stopPropagation();onSkipEx(xi);}} title="Passer cet exercice"
+          style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--re)",
+            borderRadius:6,padding:"5px 10px",fontSize:11,flexShrink:0,
+            touchAction:"manipulation"}}>⛔</button>
+      )}
+      <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+        <span className="M" style={{fontSize:11,color:tcol,fontWeight:700}}>{doneCount}/{ex.sets.length}</span>
+        {onToggle&&<span style={{fontSize:16,color:"var(--t3)",display:"inline-block",
+          transform:isOpen?"rotate(90deg)":"none",transition:"transform .2s"}}>›</span>}
+      </div>
     </div>
   );
-}
+});
 
-function ActiveSession({session,sessions,cfg,progs,onUpdateSet,onFinish,onTimer,onPR,onSkipEx}){
+/* Active Session */
+const ActiveSession=memo(function ActiveSession({session,sessions,cfg,progs,onUpdateSet,onFinish,onTimer,onPR,onSkipEx}){
   const t=getTPL(session.tpl,progs)||{lbl:"LIBRE",col:"#64748b"};
-  const [elapsed,setElapsed]=useState(0);
   const [compact,setCompact]=useState(()=>{try{return localStorage.getItem("pt_compact")==="1"}catch{return false}});
   const [openEx,setOpenEx]=useState(0);
   const [steps,setSteps]=useState({});
   const [expandStep,setExpandStep]=useState(null);
-  const wlRef=useRef(null);
   const inputRefs=useRef({});
+  const rowRefs=useRef({});
   const swipeX=useRef(null);
+  const wlRef=useRef(null);
 
   useEffect(()=>{
-    const iv=setInterval(()=>setElapsed(Math.round((Date.now()-session.startTime)/1000)),1000);
     if(navigator.wakeLock)navigator.wakeLock.request("screen").then(wl=>{wlRef.current=wl;}).catch(()=>{});
-    return()=>{clearInterval(iv);if(wlRef.current)wlRef.current.release().catch(()=>{});};
-  },[session.startTime]);
+    return()=>{if(wlRef.current)wlRef.current.release().catch(()=>{});};
+  },[]);
 
-  function toggleCompact(v){
-    setCompact(v);
-    try{localStorage.setItem("pt_compact",v?"1":"0");}catch{}
-  }
+  const toggleCompact=useCallback(v=>{
+    setCompact(v);try{localStorage.setItem("pt_compact",v?"1":"0");}catch{}
+  },[]);
 
-  function getStep(exId){return steps[exId]||2.5;}
-  function setStep(exId,s){setSteps(p=>({...p,[exId]:s}));setExpandStep(null);}
+  const getStep=useCallback(exId=>steps[exId]||2.5,[steps]);
 
-  function getPrev(xid){
-    const p=sessions.find(s=>s.tpl===session.tpl&&s.id!==session.id);
-    return p?p.ex.find(e=>e.id===xid):null;
-  }
+  const handleStepChange=useCallback((xi,s)=>{
+    const exId=session.ex[xi]?.id;
+    if(exId)setSteps(p=>({...p,[exId]:s}));
+    setExpandStep(null);
+  },[session.ex]);
 
-  function adjW(xi,si,d){
+  const getPrev=useCallback(xid=>{
+    const exNm=session.ex.find(e=>e.id===xid)?.nm||"";
+    const na=exNm.toLowerCase().trim();
+    function match(a,b){
+      if(!a||!b)return false;
+      const nb=b.toLowerCase().trim();
+      if(na===nb)return true;
+      if(na.length>=4&&(nb.includes(na)||na.includes(nb)))return true;
+      const wa=na.split(/\s+/).filter(w=>w.length>=4);
+      const wb=new Set(nb.split(/\s+/).filter(w=>w.length>=4));
+      return wa.some(w=>wb.has(w));
+    }
+    for(const s of sessions){
+      if(s.id===session.id)continue;
+      const found=s.ex.find(e=>e.id===xid||match(exNm,e.nm));
+      if(found&&found.sets.some(s2=>s2.w>0||s2.r>0))return found;
+    }
+    return null;
+  },[sessions,session]);
+
+  const getHistBestRM=useCallback(exId=>{
+    const allRMs=sessions.flatMap(s=>s.ex.filter(e=>e.id===exId)
+      .flatMap(e=>e.sets.map(s2=>oneRM(s2.w,s2.r)||0)));
+    return allRMs.length?Math.max(0,...allRMs):0;
+  },[sessions]);
+
+  const adjW=useCallback((xi,si,d)=>{
     const c=session.ex[xi].sets[si].w||0;
     onUpdateSet(xi,si,"w",String(Math.max(0,Math.round((c+d)*4)/4)));
-  }
-  function adjR(xi,si,d){
+  },[session.ex,onUpdateSet]);
+
+  const adjR=useCallback((xi,si,d)=>{
     const c=session.ex[xi].sets[si].r||0;
     onUpdateSet(xi,si,"r",String(Math.max(0,c+d)));
-  }
+  },[session.ex,onUpdateSet]);
 
-  function copyLastSet(xi){
+  const unvalidateSet=useCallback((xi,si)=>{
+    onUpdateSet(xi,si,"done",false);
+    onUpdateSet(xi,si,"doneAt",null);
+  },[onUpdateSet]);
+
+  const copyLastSet=useCallback(xi=>{
     const ex=session.ex[xi];
     const last=[...ex.sets].reverse().find(s=>s.done);
     if(!last)return;
     const nxt=ex.sets.findIndex(s=>!s.done);
     if(nxt<0)return;
-    if(last.w)onUpdateSet(xi,nxt,"w",last.w);
-    if(last.r)onUpdateSet(xi,nxt,"r",last.r);
-  }
+    if(last.w!=null)onUpdateSet(xi,nxt,"w",last.w);
+    if(last.r!=null)onUpdateSet(xi,nxt,"r",last.r);
+  },[session.ex,onUpdateSet]);
 
-  function validateSet(xi,si){
+  const validateSet=useCallback((xi,si)=>{
     const ex=session.ex[xi];
     const set=ex.sets[si];
     const ispr=!ex.bw&&checkPR(sessions,ex.id,set.w||0);
@@ -1729,292 +1890,188 @@ function ActiveSession({session,sessions,cfg,progs,onUpdateSet,onFinish,onTimer,
     onUpdateSet(xi,si,"doneAt",Date.now());
     if(navigator.vibrate)navigator.vibrate(50);
     if(ispr)onPR(ex.nm+" — "+set.w+"kg");
-    // Find next exercise for timer info
+    // Find next exercise for timer
     let nextEx=null,nextPrevW=0;
-    outer: for(let nxi=xi;nxi<session.ex.length;nxi++){
+    outer:for(let nxi=xi;nxi<session.ex.length;nxi++){
       const startSi=nxi===xi?si+1:0;
       for(let nsi=startSi;nsi<session.ex[nxi].sets.length;nsi++){
         if(!session.ex[nxi].sets[nsi].done){
           if(nxi!==xi){
             nextEx=session.ex[nxi];
-            const np=getPrev(nextEx.id);
-            nextPrevW=np?bestW(np):0;
+            const np=sessions.find(s=>s.tpl===session.tpl&&s.id!==session.id);
+            nextPrevW=np?Math.max(0,...(np.ex.find(e=>e.id===nextEx.id)?.sets.map(s=>s.w||0)||[0])):0;
           }
           break outer;
         }
       }
     }
-    const rt=(getTPL(session.tpl,progs)?.ex[xi]?.rt)||ex.rt||0;
+    const rt=ex.rt||0;
     if(rt>0)onTimer(rt,ex.nm,nextEx,nextPrevW);
-    // Auto-focus next undone set
+    // Auto-scroll to next active set
     setTimeout(()=>{
       for(let nsi=si+1;nsi<ex.sets.length;nsi++){
         if(!ex.sets[nsi].done){
-          const key=ex.bw?`r_${xi}_${nsi}`:`w_${xi}_${nsi}`;
+          rowRefs.current[xi+"_"+nsi]?.scrollIntoView({behavior:"smooth",block:"nearest"});
+          const key=ex.bw?"r_"+xi+"_"+nsi:"w_"+xi+"_"+nsi;
           inputRefs.current[key]?.focus();
           return;
         }
       }
+      // Move to next exercise
       if(!compact){
         for(let nxi=xi+1;nxi<session.ex.length;nxi++){
-          if(!session.ex[nxi].skipped){setOpenEx(nxi);return;}
+          if(!session.ex[nxi].skipped){
+            setOpenEx(nxi);
+            setTimeout(()=>rowRefs.current[nxi+"_0"]?.scrollIntoView({behavior:"smooth",block:"start"}),150);
+            return;
+          }
         }
       }
     },150);
-  }
+  },[session,sessions,onUpdateSet,onTimer,onPR,compact]);
 
-  // Swipe handling for detailed mode
   function onTouchStart(e){swipeX.current=e.touches[0].clientX;}
   function onTouchEnd(e){
     if(swipeX.current===null)return;
     const diff=swipeX.current-e.changedTouches[0].clientX;
     if(Math.abs(diff)>55){
-      if(diff>0&&openEx<session.ex.length-1)setOpenEx(openEx+1);
-      else if(diff<0&&openEx>0)setOpenEx(openEx-1);
+      if(diff>0&&openEx<session.ex.length-1)setOpenEx(o=>o+1);
+      else if(diff<0&&openEx>0)setOpenEx(o=>o-1);
     }
     swipeX.current=null;
   }
 
   const allSets=session.ex.flatMap(e=>e.sets);
   const prog=allSets.length?allSets.filter(s=>s.done).length/allSets.length:0;
-  const mm=String(Math.floor(elapsed/60)).padStart(2,"0"),ss2=String(elapsed%60).padStart(2,"0");
-  const STEPS=[0.5,1,2.5,5];
 
-  // ── SHARED SET ROW ──
-  function SetRow({ex,xi,set,si,step,prevBestW}){
-    const isActive=!set.done&&ex.sets.slice(0,si).every(s=>s.done||s.skipped);
-    const wAlert=!set.done&&set.w>0&&prevBestW>0&&parseFloat(set.w)<prevBestW;
-    const cols=ex.bw?"26px 1fr 96px 38px":"26px 96px 96px 1fr 38px";
-    return(
-      <div style={{marginBottom:4}}>
-        <div style={{display:"grid",gridTemplateColumns:cols,gap:4,alignItems:"center",
-          background:set.done?"rgba(0,229,160,.07)":isActive?"var(--s2)":"transparent",
-          borderRadius:9,padding:"6px 5px",
-          border:"1px solid "+(set.done?"#00b07d":isActive?"var(--bd2)":"transparent"),
-          transition:"all .2s"}}>
-          <div className="M" style={{fontSize:12,color:"var(--t3)",fontWeight:700,textAlign:"center"}}>{si+1}</div>
-          {!ex.bw&&(
-            <div style={{display:"flex",alignItems:"center",gap:2}}>
-              <button disabled={set.done} onClick={()=>adjW(xi,si,-step)} style={{background:"var(--s3)",border:"none",color:"var(--t2)",borderRadius:5,width:22,height:30,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:set.done?.4:1}}>−</button>
-              <input type="number" inputMode="decimal" step={step}
-                ref={el=>inputRefs.current[`w_${xi}_${si}`]=el}
-                value={set.w!=null?set.w:""} disabled={set.done}
-                onChange={e=>onUpdateSet(xi,si,"w",e.target.value)} placeholder="kg"
-                style={{flex:1,background:"var(--s3)",border:"1px solid var(--bd2)",borderRadius:5,padding:"5px 2px",color:"var(--t1)",fontSize:14,fontFamily:"JetBrains Mono,monospace",fontWeight:700,textAlign:"center",minWidth:0,opacity:set.done?.5:1}}/>
-              <button disabled={set.done} onClick={()=>adjW(xi,si,step)} style={{background:"var(--s3)",border:"none",color:"var(--t2)",borderRadius:5,width:22,height:30,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:set.done?.4:1}}>+</button>
-            </div>
-          )}
-          <div style={{display:"flex",alignItems:"center",gap:2}}>
-            <button disabled={set.done} onClick={()=>adjR(xi,si,-1)} style={{background:"var(--s3)",border:"none",color:"var(--t2)",borderRadius:5,width:22,height:30,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:set.done?.4:1}}>−</button>
-            <input type="number" inputMode="numeric"
-              ref={el=>inputRefs.current[`r_${xi}_${si}`]=el}
-              value={set.r!=null?set.r:""} disabled={set.done}
-              onChange={e=>onUpdateSet(xi,si,"r",e.target.value)} placeholder="reps"
-              style={{flex:1,background:"var(--s3)",border:"1px solid var(--bd2)",borderRadius:5,padding:"5px 2px",color:"var(--t1)",fontSize:14,fontFamily:"JetBrains Mono,monospace",fontWeight:700,textAlign:"center",minWidth:0,opacity:set.done?.5:1}}/>
-            <button disabled={set.done} onClick={()=>adjR(xi,si,1)} style={{background:"var(--s3)",border:"none",color:"var(--t2)",borderRadius:5,width:22,height:30,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:set.done?.4:1}}>+</button>
-          </div>
-          <div style={{display:"flex",gap:1,justifyContent:"center"}}>
-            {[{v:1,ic:"😌"},{v:2,ic:"😤"},{v:3,ic:"💀"}].map(rpe=>(
-              <button key={rpe.v} onClick={()=>onUpdateSet(xi,si,"rpe",set.rpe===rpe.v?null:rpe.v)}
-                style={{background:set.rpe===rpe.v?"var(--s3)":"transparent",border:"none",borderRadius:4,padding:"2px",fontSize:12,opacity:!set.done&&set.rpe==null?.35:1}}>
-                {rpe.ic}
-              </button>
-            ))}
-          </div>
-          <button disabled={set.done} onClick={()=>validateSet(xi,si)}
-            style={{background:set.done?t.col+"33":t.col,color:set.done?t.col:"#000",border:"none",borderRadius:8,height:36,width:36,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s",cursor:set.done?"default":"pointer",flexShrink:0}}>
-            {set.done?"✓":"›"}
-          </button>
-        </div>
-        {wAlert&&(
-          <div style={{fontSize:10,color:"#f97316",padding:"2px 6px",display:"flex",alignItems:"center",gap:4}}>
-            ⚠️ Moins que la dernière fois ({prevBestW}kg)
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ── EXERCISE HEADER (shared) ──
-  function ExHeader({ex,xi,isOpen,toggle}){
-    const prev=getPrev(ex.id);
-    const prevBestW=prev?bestW(prev):0;
-    const exDone=ex.sets.every(s=>s.done||s.skipped);
-    const step=getStep(ex.id);
-    const doneCount=ex.sets.filter(s=>s.done).length;
-    const curRM=bestRM(ex);
-    return(
-      <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",cursor:toggle?"pointer":"default"}} onClick={toggle||undefined}>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-            {(exDone||ex.skipped)&&<span style={{color:ex.skipped?"var(--re)":t.col,fontSize:12}}>{ex.skipped?"⛔":"✓"}</span>}
-            <div style={{fontSize:14,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ex.nm}</div>
-            <span style={{background:(MU_COL[ex.mu]||"#888")+"22",color:MU_COL[ex.mu]||"#888",fontSize:9,padding:"1px 5px",borderRadius:3,fontWeight:700,flexShrink:0}}>{ex.mu}</span>
-            {curRM>0&&<span className="M" style={{fontSize:9,color:"var(--t3)",background:"var(--s2)",padding:"1px 5px",borderRadius:3,flexShrink:0}}>~{curRM}kg</span>}
-          </div>
-          <div style={{fontSize:10,color:"var(--t3)",marginTop:1,display:"flex",gap:5,flexWrap:"wrap"}}>
-            <span>{ex.ns}×{ex.rp}</span>
-            {ex.rt>0&&<span>· ⏱{fmtD(ex.rt)}</span>}
-            {prevBestW>0&&<span style={{color:"var(--t2)"}}>· préc. {prevBestW}kg</span>}
-          </div>
-        </div>
-        {}
-        {!ex.bw&&(
-          <div style={{position:"relative"}}>
-            <button onClick={e=>{e.stopPropagation();setExpandStep(expandStep===xi?null:xi);}}
-              style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--t2)",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",gap:3}}>
-              ±{step}kg
-            </button>
-            {expandStep===xi&&(
-              <div style={{position:"absolute",right:0,top:"110%",background:"var(--s1)",border:"1px solid var(--bd)",borderRadius:8,padding:"4px",display:"flex",gap:3,zIndex:20,boxShadow:"0 4px 16px rgba(0,0,0,.4)"}}>
-                {STEPS.map(s=>(
-                  <button key={s} onClick={e=>{e.stopPropagation();setStep(ex.id,s);}}
-                    style={{background:step===s?t.col+"33":"var(--s2)",color:step===s?t.col:"var(--t2)",border:"1px solid "+(step===s?t.col+"44":"var(--bd)"),borderRadius:5,padding:"4px 8px",fontSize:11,fontWeight:700}}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {}
-        {!exDone&&!ex.skipped&&(
-          <button onClick={e=>{e.stopPropagation();onSkipEx(xi);}}
-            title="Passer cet exercice"
-            style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--re)",borderRadius:6,padding:"3px 8px",fontSize:11,opacity:.7,flexShrink:0}}>
-            ⛔
-          </button>
-        )}
-        {}
-        <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-          <span className="M" style={{fontSize:11,color:t.col,fontWeight:700}}>{doneCount}/{ex.sets.length}</span>
-          {toggle&&<span style={{fontSize:16,color:"var(--t3)",transition:"transform .2s",display:"inline-block",transform:isOpen?"rotate(90deg)":"none"}}>›</span>}
-        </div>
-      </div>
-    );
-  }
-
-  // ── COMPACT VIEW ──
-  function CompactView(){
-    return(
-      <div style={{padding:"8px 14px",display:"flex",flexDirection:"column",gap:6}}>
-        {session.ex.map((ex,xi)=>{
-          const prev=getPrev(ex.id);
-          const prevBestW=prev?bestW(prev):0;
-          const step=getStep(ex.id);
-          return(
-            <div key={ex.id+"_"+xi} style={{background:"var(--s1)",borderRadius:12,overflow:"hidden",border:"1px solid "+(ex.sets.every(s=>s.done||s.skipped)?t.col+"44":"var(--bd)")}}>
-              <ExHeader ex={ex} xi={xi} isOpen={false} toggle={null}/>
-              {!ex.skipped&&(
-                <div style={{padding:"0 12px 10px"}}>
-                  <div style={{display:"grid",gridTemplateColumns:ex.bw?"26px 1fr 96px 38px":"26px 96px 96px 1fr 38px",gap:4,padding:"0 5px 4px"}}>
-                    <div style={{fontSize:9,color:"var(--t3)"}}>S</div>
-                    {!ex.bw&&<div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>KG</div>}
-                    <div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>REPS</div>
-                    <div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>RPE</div>
-                    <div/>
-                  </div>
-                  {ex.sets.map((set,si)=>(
-                    <SetRow key={si} ex={ex} xi={xi} set={set} si={si} step={step} prevBestW={prevBestW}/>
-                  ))}
-                  {ex.sets.some(s=>s.done)&&ex.sets.some(s=>!s.done)&&(
-                    <button onClick={()=>copyLastSet(xi)} style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--t2)",borderRadius:7,padding:"4px 10px",fontSize:10,display:"flex",alignItems:"center",gap:4,marginTop:2}}>
-                      ⎘ Copier dernier set
-                    </button>
-                  )}
-                </div>
-              )}
-              {ex.skipped&&<div style={{padding:"6px 14px 10px",fontSize:11,color:"var(--re)",opacity:.7}}>Exercice passé</div>}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // ── DETAILED VIEW ──
-  function DetailedView(){
-    return(
-      <div style={{padding:"8px 14px",display:"flex",flexDirection:"column",gap:7}} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        {session.ex.map((ex,xi)=>{
-          const prev=getPrev(ex.id);
-          const prevBestW=prev?bestW(prev):0;
-          const step=getStep(ex.id);
-          const isOpen=openEx===xi;
-          const prevRM=prev?bestRM(prev):null;
-          return(
-            <div key={ex.id+"_"+xi} style={{background:"var(--s1)",borderRadius:14,overflow:"hidden",border:"1px solid "+(ex.sets.every(s=>s.done||s.skipped)?t.col+"44":"var(--bd)"),transition:"border-color .3s"}}>
-              <ExHeader ex={ex} xi={xi} isOpen={isOpen} toggle={()=>setOpenEx(isOpen?-1:xi)}/>
-              {isOpen&&!ex.skipped&&(
-                <div style={{padding:"0 14px 12px"}} className="su">
-                  {}
-                  {!ex.bw&&prev&&(
-                    <div style={{background:"var(--s2)",borderRadius:8,padding:"7px 11px",marginBottom:8,display:"flex",gap:14,flexWrap:"wrap"}}>
-                      <div><div style={{fontSize:9,color:"var(--t3)"}}>PRÉC.</div><div className="M" style={{fontSize:11,color:"var(--t2)",fontWeight:600}}>{bestSet(prev).w>0?bestSet(prev).w+"kg×"+bestSet(prev).r:Math.max(...prev.sets.map(s=>s.r||0))+" reps"}</div>{prevRM&&<div style={{fontSize:9,color:"var(--t3)"}}>1RM ~{prevRM}kg</div>}</div>
-                      {(()=>{const sg=getSugg(sessions,session.tpl,ex.id);return sg?(<div><div style={{fontSize:9,color:"var(--t3)"}}>OBJECTIF</div><div className="M" style={{fontSize:11,color:sg.up?"var(--gr)":"var(--t2)",fontWeight:700}}>{sg.w}kg {sg.up&&"↑"}</div></div>):null;})()}
-                    </div>
-                  )}
-                  {}
-                  <div style={{display:"grid",gridTemplateColumns:ex.bw?"26px 1fr 96px 38px":"26px 96px 96px 1fr 38px",gap:4,padding:"0 5px 4px"}}>
-                    <div style={{fontSize:9,color:"var(--t3)"}}>S</div>
-                    {!ex.bw&&<div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>KG</div>}
-                    <div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>REPS</div>
-                    <div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>RPE</div>
-                    <div/>
-                  </div>
-                  {ex.sets.map((set,si)=>(
-                    <SetRow key={si} ex={ex} xi={xi} set={set} si={si} step={step} prevBestW={prevBestW}/>
-                  ))}
-                  {ex.sets.some(s=>s.done)&&ex.sets.some(s=>!s.done)&&(
-                    <button onClick={()=>copyLastSet(xi)} style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--t2)",borderRadius:7,padding:"4px 10px",fontSize:10,display:"flex",alignItems:"center",gap:4,marginTop:4}}>
-                      ⎘ Copier dernier set
-                    </button>
-                  )}
-                </div>
-              )}
-              {isOpen&&ex.skipped&&<div style={{padding:"6px 14px 10px",fontSize:11,color:"var(--re)",opacity:.7}}>Exercice passé</div>}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
+  const COL_H=bwEx=>(
+    <div style={{display:"grid",
+      gridTemplateColumns:bwEx?"28px 1fr 46px":"28px 1fr 1fr 46px",
+      gap:4,padding:"0 5px 4px"}}>
+      <div style={{fontSize:9,color:"var(--t3)"}}>S</div>
+      {!bwEx&&<div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>KG</div>}
+      <div style={{fontSize:9,color:"var(--t3)",textAlign:"center"}}>REPS</div>
+      <div/>
+    </div>
+  );
 
   return(
     <div style={{paddingBottom:120}}>
-      {}
-      <div style={{position:"sticky",top:0,zIndex:10,background:"var(--bg)",borderBottom:"1px solid var(--bd)",padding:"9px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{position:"sticky",top:0,zIndex:10,background:"var(--bg)",
+        borderBottom:"1px solid var(--bd)",padding:"9px 16px",
+        display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           <Tag lbl={t.lbl} col={t.col} sm/>
           <div className="R" style={{fontSize:13,marginTop:2}}>{sessTitle(session,progs)}</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {}
           <div style={{display:"flex",background:"var(--s2)",borderRadius:8,border:"1px solid var(--bd)",overflow:"hidden"}}>
             {[{v:false,ic:"☰"},{v:true,ic:"⊞"}].map(({v,ic})=>(
-              <button key={String(v)} onClick={()=>toggleCompact(v)} style={{background:compact===v?t.col+"33":"transparent",color:compact===v?t.col:"var(--t3)",border:"none",padding:"5px 10px",fontSize:14,cursor:"pointer",transition:"all .15s"}}>
+              <button key={String(v)} onClick={()=>toggleCompact(v)}
+                style={{background:compact===v?t.col+"33":"transparent",
+                  color:compact===v?t.col:"var(--t3)",border:"none",
+                  padding:"6px 12px",fontSize:14,cursor:"pointer",
+                  touchAction:"manipulation"}}>
                 {ic}
               </button>
             ))}
           </div>
-          {}
-          <div className="M" style={{fontSize:22,fontWeight:700,color:t.col}}>{mm}:{ss2}</div>
+          <SessionTimer startTime={session.startTime} col={t.col}/>
         </div>
       </div>
-      {}
-      <div style={{height:3,background:"var(--bd)"}}><div style={{height:"100%",background:t.col,transition:"width .5s",width:(prog*100)+"%"}}/></div>
+      <div style={{height:3,background:"var(--bd)"}}>
+        <div style={{height:"100%",background:t.col,transition:"width .5s",width:(prog*100)+"%"}}/>
+      </div>
 
-      {compact?<CompactView/>:<DetailedView/>}
+      <div style={{padding:"8px 14px",display:"flex",flexDirection:"column",gap:compact?5:7}}
+        onTouchStart={compact?undefined:onTouchStart}
+        onTouchEnd={compact?undefined:onTouchEnd}>
+        {session.ex.map((ex,xi)=>{
+          const prev=getPrev(ex.id);
+          const prevBestW=prev?Math.max(0,...prev.sets.map(s=>s.w||0)):0;
+          const stepVal=getStep(ex.id);
+          const histBestRM=getHistBestRM(ex.id);
+          const isOpen=!compact&&openEx===xi;
+          const showSets=compact||isOpen;
+          return(
+            <div key={ex.id+"_"+xi}
+              style={{background:"var(--s1)",borderRadius:compact?11:14,overflow:"hidden",
+                border:"1px solid "+(ex.sets.every(s=>s.done||s.skipped)?t.col+"44":"var(--bd)"),
+                transition:"border-color .3s"}}>
+              <ExHeader
+                ex={ex} xi={xi} isOpen={isOpen}
+                onToggle={compact?null:()=>setOpenEx(isOpen?-1:xi)}
+                tcol={t.col} stepVal={stepVal}
+                onStepChange={handleStepChange}
+                expandStep={expandStep} onExpandStep={setExpandStep}
+                onSkipEx={onSkipEx}
+              />
+              {showSets&&!ex.skipped&&(
+                <div style={{padding:"0 12px 10px"}} className={compact?"":"su"}>
+                  {!compact&&!ex.bw&&prev&&(
+                    <div style={{background:"var(--s2)",borderRadius:8,padding:"7px 11px",marginBottom:8,display:"flex",gap:14,flexWrap:"wrap"}}>
+                      <div><div style={{fontSize:9,color:"var(--t3)"}}>PRÉC.</div>
+                        <div className="M" style={{fontSize:11,color:"var(--t2)",fontWeight:600}}>
+                          {bestSet(prev).w>0?bestSet(prev).w+"kg×"+bestSet(prev).r:Math.max(...prev.sets.map(s=>s.r||0))+" reps"}
+                        </div>
+                      </div>
+                      {(()=>{const sg=getSugg(sessions,session.tpl,ex.id);return sg?(
+                        <div><div style={{fontSize:9,color:"var(--t3)"}}>OBJECTIF</div>
+                          <div className="M" style={{fontSize:11,color:sg.up?"var(--gr)":"var(--t2)",fontWeight:700}}>{sg.w}kg {sg.up&&"↑"}</div>
+                        </div>
+                      ):null;})()}
+                    </div>
+                  )}
+                  {COL_H(ex.bw)}
+                  {ex.sets.map((set,si)=>{
+                    const isAct=!set.done&&ex.sets.slice(0,si).every(s=>s.done||s.skipped);
+                    return(
+                      <SetRow key={si}
+                        xi={xi} si={si} set={set} bwEx={ex.bw}
+                        step={stepVal} prevBestW={prevBestW}
+                        tcol={t.col} histBestRM={histBestRM}
+                        isActive={isAct}
+                        rowRef={el=>rowRefs.current[xi+"_"+si]=el}
+                        onUpd={onUpdateSet}
+                        onAdjW={adjW} onAdjR={adjR}
+                        onValidate={validateSet}
+                        onUnvalidate={unvalidateSet}
+                      />
+                    );
+                  })}
+                  {ex.sets.some(s=>s.done)&&ex.sets.some(s=>!s.done)&&(
+                    <button onClick={()=>copyLastSet(xi)}
+                      style={{background:"var(--s2)",border:"1px solid var(--bd)",color:"var(--t2)",
+                        borderRadius:7,padding:"6px 12px",fontSize:11,
+                        display:"flex",alignItems:"center",gap:4,marginTop:3,
+                        touchAction:"manipulation"}}>
+                      ⎘ Copier dernier set
+                    </button>
+                  )}
+                </div>
+              )}
+              {showSets&&ex.skipped&&(
+                <div style={{padding:"6px 14px 10px",fontSize:11,color:"var(--re)",opacity:.7}}>Exercice passé</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
-      {}
       <div style={{padding:"0 14px"}}>
-        <button onClick={onFinish} style={{width:"100%",background:prog>=1?t.col:"var(--s2)",color:prog>=1?"#000":"var(--t2)",border:"1px solid "+(prog>=1?t.col:"var(--bd)"),borderRadius:14,padding:"14px",fontSize:15,fontFamily:"Russo One,sans-serif",letterSpacing:".05em",transition:"all .3s"}}>
+        <button onClick={onFinish}
+          style={{width:"100%",background:prog>=1?t.col:"var(--s2)",
+            color:prog>=1?"#000":"var(--t2)",
+            border:"1px solid "+(prog>=1?t.col:"var(--bd)"),
+            borderRadius:14,padding:"16px",fontSize:15,
+            fontFamily:"Russo One,sans-serif",letterSpacing:".05em",
+            transition:"background .3s,color .3s",touchAction:"manipulation"}}>
           {prog>=1?"✓ TERMINER LA SÉANCE":"TERMINER (incomplet)"}
         </button>
       </div>
     </div>
   );
-}
+});
 
 function SessionComplete({session,cfg,progs,onNew}){
   const t=getTPL(session.tpl,progs)||{lbl:"LIBRE",col:"#64748b"};
@@ -2122,7 +2179,12 @@ function App(){
   useEffect(()=>{
     const saved=lsG(SK);setSessions(saved&&saved.length?saved:SEED);if(!saved||!saved.length)lsS(SK,SEED);
     setCfg(lsG(CK)||{bw:83,theme:"dark",bwlog:[]});
-    setCustomEx(lsG(XK)||[]);setProgs(lsG(PK)||[]);
+    setCustomEx(lsG(XK)||[]);
+    const savedP=lsG(PK)||[];
+    const mergedP=[...savedP];
+    DEFAULT_PROGRAMS.forEach(dp=>{if(!mergedP.find(p=>p.id===dp.id))mergedP.push(dp);});
+    if(mergedP.length>savedP.length)lsS(PK,mergedP);
+    setProgs(mergedP);
   },[]);
 
   // Timer tick + audio/vibration cues
@@ -2145,42 +2207,64 @@ function App(){
     return()=>clearTimeout(tmRef.current);
   },[restTimer?.sec]);
 
-  function mkSets(e,prevEx){
+  function exNamesMatch(a,b){
+    if(!a||!b)return false;
+    const na=a.toLowerCase().trim(),nb=b.toLowerCase().trim();
+    if(na===nb)return true;
+    // Contains check
+    if(na.length>=4&&(nb.includes(na)||na.includes(nb)))return true;
+    // Shared significant word (>=4 chars)
+    const wa=na.split(/\s+/).filter(w=>w.length>=4);
+    const wb=new Set(nb.split(/\s+/).filter(w=>w.length>=4));
+    return wa.some(w=>wb.has(w));
+  }
+  function findLastEx(exId,exNm){
+    for(const s of sessions){
+      const found=s.ex.find(e=>e.id===exId||exNamesMatch(e.nm,exNm));
+      if(found&&found.sets.some(s2=>s2.w>0||s2.r>0))return found;
+    }
+    return null;
+  }
+  function mkSets(e){
+    const prev=findLastEx(e.id,e.nm);
     return Array.from({length:e.ns},(_,si)=>({
-      r:prevEx&&prevEx.sets[si]?prevEx.sets[si].r:null,
-      w:prevEx&&prevEx.sets[si]&&!e.bw?prevEx.sets[si].w:null,
+      r:prev?.sets[si]?.r??null,
+      w:!e.bw?(prev?.sets[si]?.w??null):null,
       done:false,rpe:null,doneAt:null,
     }));
   }
 
   function startProgSession(tplId){
     const t=getTPL(tplId,progs);if(!t)return;
-    const prev=sessions.find(s=>s.tpl===tplId);
     setCurr({id:Date.now().toString(),date:new Date().toISOString().split("T")[0],tpl:tplId,startTime:Date.now(),dur:0,notes:"",mood:3,
-      ex:t.ex.map(e=>({...e,sets:mkSets(e,prev?.ex.find(p=>p.id===e.id)),skipped:false}))});
+      ex:t.ex.map(e=>({...e,sets:mkSets(e),skipped:false}))});
     setPhase("active");setTab("session");
   }
 
   function startFreeSession(selEx){
-    const prevLibre=sessions.find(s=>s.tpl==="libre");
     setCurr({id:Date.now().toString(),date:new Date().toISOString().split("T")[0],tpl:"libre",startTime:Date.now(),dur:0,notes:"",mood:3,
-      ex:selEx.map(e=>({...e,ns:e.nsOvr||e.ns,rp:e.rpOvr||e.rp,sets:mkSets({...e,ns:e.nsOvr||e.ns},prevLibre?.ex.find(p=>p.id===e.id)),skipped:false}))});
+      ex:selEx.map(e=>({...e,ns:e.nsOvr||e.ns,rp:e.rpOvr||e.rp,sets:mkSets({...e,ns:e.nsOvr||e.ns}),skipped:false}))});
     setPhase("active");setTab("session");
   }
 
-  function updateSet(xi,si,field,value){
+  const updateSet=useCallback((xi,si,field,value)=>{
     setCurr(s=>({...s,ex:s.ex.map((e,i)=>i!==xi?e:{...e,
       sets:e.sets.map((set,j)=>j!==si?set:{...set,[field]:["done","rpe"].includes(field)?value:field==="doneAt"?value:(value===""?null:parseFloat(value)||0)})})}));
-  }
+  },[]);
 
-  function skipEx(xi){
+  const skipEx=useCallback(xi=>{
     setCurr(s=>({...s,ex:s.ex.map((e,i)=>i!==xi?e:{...e,skipped:true})}));
-  }
+  },[]);
 
-  function finishSession(mood=3){
-    const done={...curr,dur:Math.round((Date.now()-curr.startTime)/1000),mood};
-    const upd=[done,...sessions];setSessions(upd);lsS(SK,upd);setCurr(done);setPhase("complete");setRestTimer(null);
-  }
+  const currRef=useRef(curr);
+  useEffect(()=>{currRef.current=curr;},[curr]);
+  const finishSession=useCallback((mood=3)=>{
+    const c=currRef.current;
+    if(!c)return;
+    const done={...c,dur:Math.round((Date.now()-c.startTime)/1000),mood};
+    setSessions(s=>{const upd=[done,...s];lsS(SK,upd);return upd;});
+    setCurr(done);setPhase("complete");setRestTimer(null);
+  },[]);
 
   function deleteSession(id){const upd=sessions.filter(s=>s.id!==id);setSessions(upd);lsS(SK,upd);}
   function saveCfg(c){setCfg(c);lsS(CK,c);setShowSettings(false);}
@@ -2189,7 +2273,7 @@ function App(){
   function hidePreset(id){const nc=id===null?{...cfg,hiddenTpls:[]}:{...cfg,hiddenTpls:[...(cfg.hiddenTpls||[]).filter(x=>x!==id),id]};setCfg(nc);lsS(CK,nc);}
   function saveCustomEx(e){const upd=[...customEx,e];setCustomEx(upd);lsS(XK,upd);}
   function deleteCustomEx(id){const upd=customEx.filter(e=>e.id!==id);setCustomEx(upd);lsS(XK,upd);}
-  function showPR(msg){clearTimeout(prRef.current);setPRMsg(msg);prRef.current=setTimeout(()=>setPRMsg(null),3200);}
+  const showPR=useCallback(msg=>{clearTimeout(prRef.current);setPRMsg(msg);},[]);
 
   function adjustTimer(delta){
     setRestTimer(t=>t?{...t,sec:Math.max(0,t.sec+delta),total:Math.max(t.total,t.sec+delta)}:null);
@@ -2209,7 +2293,7 @@ function App(){
         </div>
       </div>
 
-      {prMsg&&<PRToast msg={prMsg}/>}
+      {prMsg&&<PRToast msg={prMsg} onDismiss={()=>setPRMsg(null)}/>}
 
       {tab==="session"&&(
         phase==="select"?<SessionSelect sessions={sessions} cfg={cfg} progs={progs} onStart={startProgSession} onFree={()=>setPhase("free-builder")} onNewProg={()=>{setEditProg(null);setPhase("prog-builder");}} onEditProg={p=>{setEditProg(p);setPhase("prog-builder");}} onDeleteProg={deleteProg} onHidePreset={hidePreset}/>:

@@ -183,9 +183,10 @@ function homeHTML() {
       </div>
       <div style="display:flex;border-top:1px solid var(--bd)">
         <button style="flex:2;background:none;border:none;color:var(--t2);padding:8px;font-size:12px" data-start="${p.id}">▶ Démarrer</button>
+        <button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--bl);padding:8px;font-size:11px" data-editprog="${p.id}">✏️ Éditer</button>
         ${PROGS[p.id]?
-          `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--t3);padding:8px;font-size:11px" data-hide="${p.id}">🙈 Masquer</button>`:
-          `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--re);padding:8px;font-size:11px" data-del="${p.id}">🗑 Suppr.</button>`
+          `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--t3);padding:8px;font-size:11px" data-hide="${p.id}">🙈</button>`:
+          `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--re);padding:8px;font-size:11px" data-del="${p.id}">🗑</button>`
         }
       </div>
     </div>`;
@@ -537,6 +538,7 @@ function handleClick(e) {
   if(t.dataset.delses) { if(confirm('Supprimer cette séance ?')){sessions=sessions.filter(s=>s.id!==t.dataset.delses);LS('pt_s',sessions);R();} return; }
   if(t.dataset.hide) { cfg.hidden=[...(cfg.hidden||[]).filter(x=>x!==t.dataset.hide),t.dataset.hide];LS('pt_c',cfg);R(); return; }
   if(t.dataset.del) { if(confirm('Supprimer ce programme ?')){userProgs=userProgs.filter(p=>p.id!==t.dataset.del);LS('pt_p',userProgs);R();} return; }
+  if(t.dataset.editprog) { editProg(t.dataset.editprog); return; }
 
   const action = t.dataset.action;
   if(action==='settings') { showSettings(); return; }
@@ -727,6 +729,142 @@ function startElapsed() {
 function updateElapsed() {
   const el=document.getElementById('elapsed');
   if(el&&sessStart){const s=Math.round((Date.now()-sessStart)/1000);el.textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+}
+
+// ══════════════════ EDIT PROGRAM ══════════════════
+function editProg(progId) {
+  // Get the program (preset copy or user prog)
+  const baseProgs = allProgs(true);
+  const base = baseProgs[progId];
+  if(!base) return;
+
+  // Work on a mutable copy of exercises
+  let exList = (base.ex||[]).map(e=>({...e}));
+
+  const EXS=[
+    {id:'b_sq',nm:'Squat barre',mu:'Jambes',ns:4,rp:'6',rt:120,bw:0},
+    {id:'b_dc',nm:'Développé couché',mu:'Pectoraux',ns:4,rp:'8',rt:90,bw:0},
+    {id:'b_sd',nm:'Soulevé de Terre',mu:'Dos',ns:3,rp:'5',rt:180,bw:0},
+    {id:'b_dm',nm:'Dév. militaire',mu:'Épaules',ns:3,rp:'10',rt:90,bw:0},
+    {id:'b_tr',nm:'Tractions',mu:'Dos',ns:4,rp:'6',rt:120,bw:1},
+    {id:'b_hi',nm:'Hip Thrust',mu:'Jambes',ns:3,rp:'10',rt:60,bw:0},
+    {id:'b_cu',nm:'Curl barre',mu:'Bras',ns:3,rp:'12',rt:60,bw:0},
+    {id:'b_di',nm:'Dips',mu:'Pectoraux',ns:3,rp:'12',rt:60,bw:1},
+    {id:'b_ro',nm:'Romanian DL',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
+    {id:'b_ga',nm:'Gainage',mu:'Core',ns:3,rp:'60s',rt:45,bw:1},
+    {id:'b_mo',nm:'Mollets',mu:'Mollets',ns:4,rp:'15',rt:45,bw:0},
+    {id:'b_po',nm:'Pompes',mu:'Pectoraux',ns:3,rp:'Max',rt:60,bw:1},
+    {id:'b_jsq',nm:'Jump Squat',mu:'Jambes',ns:3,rp:'5',rt:90,bw:1},
+    {id:'b_sp',nm:'Sprints',mu:'Cardio',ns:5,rp:'10m',rt:60,bw:1},
+    {id:'b_bj',nm:'Box Jumps',mu:'Jambes',ns:5,rp:'4',rt:120,bw:1},
+    {id:'b_dev',nm:'Développé incliné',mu:'Pectoraux',ns:3,rp:'10',rt:90,bw:0},
+    {id:'b_trf',nm:'Tirage horizontal',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
+    {id:'b_oa',nm:'Overhead squat',mu:'Jambes',ns:3,rp:'8',rt:90,bw:0},
+    {id:'b_fb',nm:'Fentes bulgares',mu:'Jambes',ns:3,rp:'10',rt:60,bw:1},
+    {id:'b_lp',nm:'Leg Press',mu:'Jambes',ns:4,rp:'12',rt:90,bw:0},
+  ];
+
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+
+  function renderPanel() {
+    // Current exercise list
+    const currentRows = exList.map((ex,i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--s2);border:1px solid var(--bd);margin-bottom:4px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ex.nm}</div>
+          <div style="font-size:10px;color:var(--t3)">${ex.mu} · ${ex.ns}×${ex.rp}</div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          ${i>0?`<button style="background:var(--s3);border:none;color:var(--t2);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-up="${i}">↑</button>`:'<div style="width:28px"></div>'}
+          ${i<exList.length-1?`<button style="background:var(--s3);border:none;color:var(--t2);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-dn="${i}">↓</button>`:'<div style="width:28px"></div>'}
+          <button style="background:#f8717122;border:1px solid #f8717133;color:var(--re);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-rm="${i}">✕</button>
+        </div>
+      </div>`).join('');
+
+    // Bank exercises not already in list
+    const usedIds = new Set(exList.map(e=>e.id));
+    // Also include the existing program exercises in the bank
+    const allBank = [...EXS, ...(base.ex||[]).filter(e=>!EXS.find(b=>b.id===e.id))];
+    const bankRows = allBank.filter(e=>!usedIds.has(e.id)).map(e => `
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:var(--s3);border:1px solid var(--bd);margin-bottom:3px;cursor:pointer" data-ep-add="${e.id}">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.nm}</div>
+          <div style="font-size:9px;color:var(--t3)">${e.mu} · ${e.ns}×${e.rp}</div>
+        </div>
+        <span style="color:var(--gr);font-size:18px;flex-shrink:0">＋</span>
+      </div>`).join('');
+
+    ov.innerHTML = `<div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div style="font-size:18px;font-weight:900">ÉDITER</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${base.name}</div>
+        </div>
+        <button style="background:var(--s2);border:none;color:var(--t2);border-radius:8px;padding:5px 12px" id="ep-close">✕</button>
+      </div>
+
+      <div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">EXERCICES ACTUELS (${exList.length})</div>
+      <div style="max-height:220px;overflow-y:auto;margin-bottom:14px">
+        ${currentRows || '<div style="padding:12px;text-align:center;color:var(--t3);font-size:12px">Aucun exercice</div>'}
+      </div>
+
+      <div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">AJOUTER UN EXERCICE</div>
+      <div style="max-height:180px;overflow-y:auto;margin-bottom:16px">
+        ${bankRows}
+      </div>
+
+      <button style="width:100%;background:#00e5a0;color:#000;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:900;cursor:pointer" id="ep-save">ENREGISTRER</button>
+    </div>`;
+
+    // Bind events
+    ov.querySelector('#ep-close').onclick = () => ov.remove();
+    ov.querySelector('#ep-save').onclick = () => {
+      if(!exList.length){alert('Ajoute au moins un exercice');return;}
+      // Save: if preset → make user copy, if user prog → update
+      if(PROGS[progId]) {
+        // Create user override copy
+        const copy = {...base, id:'up_'+Date.now(), ex: exList};
+        userProgs = [...userProgs, copy];
+        // Hide the original preset
+        cfg.hidden = [...(cfg.hidden||[]).filter(x=>x!==progId), progId];
+        LS('pt_c', cfg);
+      } else {
+        userProgs = userProgs.map(p => p.id===progId ? {...p, ex:exList} : p);
+      }
+      LS('pt_p', userProgs);
+      ov.remove();
+      view='home'; R();
+    };
+
+    ov.addEventListener('click', e => {
+      const btn = e.target.closest('[data-ep-rm],[data-ep-up],[data-ep-dn],[data-ep-add]');
+      if(!btn) return;
+      if(btn.dataset.epRm !== undefined || btn.getAttribute('data-ep-rm') !== null) {
+        const i = +(btn.getAttribute('data-ep-rm'));
+        exList.splice(i,1); renderPanel(); return;
+      }
+      if(btn.getAttribute('data-ep-up') !== null) {
+        const i = +(btn.getAttribute('data-ep-up'));
+        if(i>0){[exList[i-1],exList[i]]=[exList[i],exList[i-1]];renderPanel();} return;
+      }
+      if(btn.getAttribute('data-ep-dn') !== null) {
+        const i = +(btn.getAttribute('data-ep-dn'));
+        if(i<exList.length-1){[exList[i],exList[i+1]]=[exList[i+1],exList[i]];renderPanel();} return;
+      }
+      if(btn.getAttribute('data-ep-add') !== null) {
+        const id = btn.getAttribute('data-ep-add');
+        const ex = allBank.find(e=>e.id===id);
+        if(ex){exList.push({...ex});renderPanel();} return;
+      }
+    });
+  }
+
+  // Need allBank accessible in renderPanel closure
+  const allBank = [...EXS, ...(base.ex||[]).filter(e=>!EXS.find(b=>b.id===e.id))];
+
+  renderPanel();
+  document.getElementById('overlays').appendChild(ov);
 }
 
 // ══════════════════ SETTINGS ══════════════════

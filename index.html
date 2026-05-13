@@ -183,7 +183,7 @@ function homeHTML() {
       </div>
       <div style="display:flex;border-top:1px solid var(--bd)">
         <button style="flex:2;background:none;border:none;color:var(--t2);padding:8px;font-size:12px" data-start="${p.id}">▶ Démarrer</button>
-        <button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--bl);padding:8px;font-size:11px" data-editprog="${p.id}">✏️ Éditer</button>
+        <button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--bl);padding:8px;font-size:11px" onclick="editProg('${p.id}')">✏️ Éditer</button>
         ${PROGS[p.id]?
           `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--t3);padding:8px;font-size:11px" data-hide="${p.id}">🙈</button>`:
           `<button style="flex:1;background:none;border:none;border-left:1px solid var(--bd);color:var(--re);padding:8px;font-size:11px" data-del="${p.id}">🗑</button>`
@@ -308,12 +308,18 @@ function sessionHTML() {
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
           <span class="mono" style="font-size:11px;color:${p.col}">${doneSets}/${ex.sets.length}</span>
+          ${isOpen&&!allDone?`<button style="background:none;border:none;color:var(--t3);font-size:11px;padding:2px 4px;opacity:.6" data-rmex="${xi}">✕</button>`:''}
           <span style="color:var(--t3);font-size:16px;transform:${isOpen?'rotate(90deg)':'none'};transition:transform .2s">›</span>
         </div>
       </div>
       ${isOpen?`<div style="padding:0 12px 10px">${colHdr}${setRows}${actionBtns}</div>`:''}
     </div>`;
   }).join('<div style="margin-bottom:7px"></div>');
+
+  // Add exercise / replace button (shown at bottom of list)
+  const addExBtn = `<div style="padding:4px 14px 8px">
+    <button style="width:100%;background:transparent;border:1px dashed var(--bd);color:var(--bl);border-radius:10px;padding:10px;font-size:12px;font-weight:600" data-action="addex">＋ Ajouter / Remplacer un exercice</button>
+  </div>`;
 
   // Find next active set for float button
   let aXi=-1,aSi=-1,aEx=null;
@@ -350,6 +356,7 @@ function sessionHTML() {
       </div>
     </div>
     <div style="padding:8px 14px;display:flex;flex-direction:column;gap:7px">${exCards}</div>
+    ${addExBtn}
     ${floatBtn}
     <div id="rest-bar" style="display:none"></div>
     <div style="padding:0 14px;margin-top:4px">
@@ -507,10 +514,12 @@ function historyHTML() {
 }
 
 // ══════════════════ EVENTS ══════════════════
+let _bound=false;
 function bindEvents() {
+  if(_bound) return;
+  _bound=true;
   document.getElementById('app').addEventListener('click', handleClick);
   document.getElementById('app').addEventListener('change', handleChange);
-  // Long press for unvalidate
   let pressTimer=null;
   document.getElementById('app').addEventListener('touchstart', e=>{
     const lp=e.target.closest('[data-longpress]');
@@ -538,7 +547,6 @@ function handleClick(e) {
   if(t.dataset.delses) { if(confirm('Supprimer cette séance ?')){sessions=sessions.filter(s=>s.id!==t.dataset.delses);LS('pt_s',sessions);R();} return; }
   if(t.dataset.hide) { cfg.hidden=[...(cfg.hidden||[]).filter(x=>x!==t.dataset.hide),t.dataset.hide];LS('pt_c',cfg);R(); return; }
   if(t.dataset.del) { if(confirm('Supprimer ce programme ?')){userProgs=userProgs.filter(p=>p.id!==t.dataset.del);LS('pt_p',userProgs);R();} return; }
-  if(t.dataset.editprog) { editProg(t.dataset.editprog); return; }
 
   const action = t.dataset.action;
   if(action==='settings') { showSettings(); return; }
@@ -547,6 +555,7 @@ function handleClick(e) {
   if(action==='newses') { sess=null;view='home';R(); return; }
   if(action==='restore') { cfg.hidden=[];LS('pt_c',cfg);R(); return; }
   if(action==='addprog') { showAddProg(); return; }
+  if(action==='addex') { showAddSessionEx(); return; }
 }
 
 function handleChange(e) {
@@ -732,139 +741,110 @@ function updateElapsed() {
 }
 
 // ══════════════════ EDIT PROGRAM ══════════════════
+const EX_BANK=[
+  {id:'b_sq',nm:'Squat barre',mu:'Jambes',ns:4,rp:'6',rt:120,bw:0},
+  {id:'b_dc',nm:'Développé couché',mu:'Pectoraux',ns:4,rp:'8',rt:90,bw:0},
+  {id:'b_sd',nm:'Soulevé de Terre',mu:'Dos',ns:3,rp:'5',rt:180,bw:0},
+  {id:'b_dm',nm:'Dév. militaire',mu:'Épaules',ns:3,rp:'10',rt:90,bw:0},
+  {id:'b_tr',nm:'Tractions',mu:'Dos',ns:4,rp:'6',rt:120,bw:1},
+  {id:'b_hi',nm:'Hip Thrust',mu:'Jambes',ns:3,rp:'10',rt:60,bw:0},
+  {id:'b_cu',nm:'Curl barre',mu:'Bras',ns:3,rp:'12',rt:60,bw:0},
+  {id:'b_di',nm:'Dips',mu:'Pectoraux',ns:3,rp:'12',rt:60,bw:1},
+  {id:'b_ro',nm:'Romanian DL',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
+  {id:'b_ga',nm:'Gainage',mu:'Core',ns:3,rp:'60s',rt:45,bw:1},
+  {id:'b_mo',nm:'Mollets',mu:'Mollets',ns:4,rp:'15',rt:45,bw:0},
+  {id:'b_po',nm:'Pompes',mu:'Pectoraux',ns:3,rp:'Max',rt:60,bw:1},
+  {id:'b_jsq',nm:'Jump Squat',mu:'Jambes',ns:3,rp:'5',rt:90,bw:1},
+  {id:'b_sp',nm:'Sprints',mu:'Cardio',ns:5,rp:'10m',rt:60,bw:1},
+  {id:'b_bj',nm:'Box Jumps',mu:'Jambes',ns:5,rp:'4',rt:120,bw:1},
+  {id:'b_fb',nm:'Fentes bulgares',mu:'Jambes',ns:3,rp:'10',rt:60,bw:1},
+  {id:'b_th',nm:'Tirage horizontal',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
+  {id:'b_lp',nm:'Leg Press',mu:'Jambes',ns:4,rp:'12',rt:90,bw:0},
+];
+
 function editProg(progId) {
-  // Get the program (preset copy or user prog)
-  const baseProgs = allProgs(true);
-  const base = baseProgs[progId];
+  const base = allProgs(true)[progId];
   if(!base) return;
-
-  // Work on a mutable copy of exercises
-  let exList = (base.ex||[]).map(e=>({...e}));
-
-  const EXS=[
-    {id:'b_sq',nm:'Squat barre',mu:'Jambes',ns:4,rp:'6',rt:120,bw:0},
-    {id:'b_dc',nm:'Développé couché',mu:'Pectoraux',ns:4,rp:'8',rt:90,bw:0},
-    {id:'b_sd',nm:'Soulevé de Terre',mu:'Dos',ns:3,rp:'5',rt:180,bw:0},
-    {id:'b_dm',nm:'Dév. militaire',mu:'Épaules',ns:3,rp:'10',rt:90,bw:0},
-    {id:'b_tr',nm:'Tractions',mu:'Dos',ns:4,rp:'6',rt:120,bw:1},
-    {id:'b_hi',nm:'Hip Thrust',mu:'Jambes',ns:3,rp:'10',rt:60,bw:0},
-    {id:'b_cu',nm:'Curl barre',mu:'Bras',ns:3,rp:'12',rt:60,bw:0},
-    {id:'b_di',nm:'Dips',mu:'Pectoraux',ns:3,rp:'12',rt:60,bw:1},
-    {id:'b_ro',nm:'Romanian DL',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
-    {id:'b_ga',nm:'Gainage',mu:'Core',ns:3,rp:'60s',rt:45,bw:1},
-    {id:'b_mo',nm:'Mollets',mu:'Mollets',ns:4,rp:'15',rt:45,bw:0},
-    {id:'b_po',nm:'Pompes',mu:'Pectoraux',ns:3,rp:'Max',rt:60,bw:1},
-    {id:'b_jsq',nm:'Jump Squat',mu:'Jambes',ns:3,rp:'5',rt:90,bw:1},
-    {id:'b_sp',nm:'Sprints',mu:'Cardio',ns:5,rp:'10m',rt:60,bw:1},
-    {id:'b_bj',nm:'Box Jumps',mu:'Jambes',ns:5,rp:'4',rt:120,bw:1},
-    {id:'b_dev',nm:'Développé incliné',mu:'Pectoraux',ns:3,rp:'10',rt:90,bw:0},
-    {id:'b_trf',nm:'Tirage horizontal',mu:'Dos',ns:3,rp:'10',rt:90,bw:0},
-    {id:'b_oa',nm:'Overhead squat',mu:'Jambes',ns:3,rp:'8',rt:90,bw:0},
-    {id:'b_fb',nm:'Fentes bulgares',mu:'Jambes',ns:3,rp:'10',rt:60,bw:1},
-    {id:'b_lp',nm:'Leg Press',mu:'Jambes',ns:4,rp:'12',rt:90,bw:0},
-  ];
+  let exList = (base.ex||[]).map(e=>Object.assign({},e));
 
   const ov = document.createElement('div');
   ov.className = 'overlay';
+  document.getElementById('overlays').appendChild(ov);
 
-  function renderPanel() {
-    // Current exercise list
-    const currentRows = exList.map((ex,i) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--s2);border:1px solid var(--bd);margin-bottom:4px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ex.nm}</div>
-          <div style="font-size:10px;color:var(--t3)">${ex.mu} · ${ex.ns}×${ex.rp}</div>
-        </div>
-        <div style="display:flex;gap:4px;flex-shrink:0">
-          ${i>0?`<button style="background:var(--s3);border:none;color:var(--t2);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-up="${i}">↑</button>`:'<div style="width:28px"></div>'}
-          ${i<exList.length-1?`<button style="background:var(--s3);border:none;color:var(--t2);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-dn="${i}">↓</button>`:'<div style="width:28px"></div>'}
-          <button style="background:#f8717122;border:1px solid #f8717133;color:var(--re);border-radius:6px;width:28px;height:28px;font-size:14px;cursor:pointer" data-ep-rm="${i}">✕</button>
-        </div>
-      </div>`).join('');
-
-    // Bank exercises not already in list
+  function draw() {
+    const bank = EX_BANK.concat((base.ex||[]).filter(e=>!EX_BANK.find(b=>b.id===e.id)));
     const usedIds = new Set(exList.map(e=>e.id));
-    // Also include the existing program exercises in the bank
-    const allBank = [...EXS, ...(base.ex||[]).filter(e=>!EXS.find(b=>b.id===e.id))];
-    const bankRows = allBank.filter(e=>!usedIds.has(e.id)).map(e => `
-      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:var(--s3);border:1px solid var(--bd);margin-bottom:3px;cursor:pointer" data-ep-add="${e.id}">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.nm}</div>
-          <div style="font-size:9px;color:var(--t3)">${e.mu} · ${e.ns}×${e.rp}</div>
-        </div>
-        <span style="color:var(--gr);font-size:18px;flex-shrink:0">＋</span>
-      </div>`).join('');
 
-    ov.innerHTML = `<div class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <div>
-          <div style="font-size:18px;font-weight:900">ÉDITER</div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${base.name}</div>
-        </div>
-        <button style="background:var(--s2);border:none;color:var(--t2);border-radius:8px;padding:5px 12px" id="ep-close">✕</button>
-      </div>
+    const curHTML = exList.length ? exList.map((ex,i)=>
+      '<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:8px;background:var(--s2);border:1px solid var(--bd);margin-bottom:4px">'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+ex.nm+'</div>'
+      +'<div style="font-size:10px;color:var(--t3)">'+ex.mu+' · '+ex.ns+'×'+ex.rp+'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:3px;flex-shrink:0">'
+      +(i>0?'<button style="background:var(--s3);border:none;color:var(--t2);border-radius:5px;width:28px;height:28px;font-size:13px;cursor:pointer" data-up="'+i+'">↑</button>':'<div style="width:28px"></div>')
+      +(i<exList.length-1?'<button style="background:var(--s3);border:none;color:var(--t2);border-radius:5px;width:28px;height:28px;font-size:13px;cursor:pointer" data-dn="'+i+'">↓</button>':'<div style="width:28px"></div>')
+      +'<button style="background:#f8717122;border:1px solid #f8717133;color:var(--re);border-radius:5px;width:28px;height:28px;font-size:14px;cursor:pointer" data-rm="'+i+'">✕</button>'
+      +'</div></div>'
+    ).join('') : '<div style="padding:10px;text-align:center;color:var(--t3);font-size:12px">Aucun exercice</div>';
 
-      <div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">EXERCICES ACTUELS (${exList.length})</div>
-      <div style="max-height:220px;overflow-y:auto;margin-bottom:14px">
-        ${currentRows || '<div style="padding:12px;text-align:center;color:var(--t3);font-size:12px">Aucun exercice</div>'}
-      </div>
+    const addHTML = bank.filter(e=>!usedIds.has(e.id)).map(e=>
+      '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:var(--s3);border:1px solid var(--bd);margin-bottom:3px;cursor:pointer" data-add="'+e.id+'">'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.nm+'</div>'
+      +'<div style="font-size:9px;color:var(--t3)">'+e.mu+' · '+e.ns+'×'+e.rp+'</div>'
+      +'</div>'
+      +'<span style="color:var(--gr);font-size:18px;flex-shrink:0">＋</span>'
+      +'</div>'
+    ).join('');
 
-      <div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">AJOUTER UN EXERCICE</div>
-      <div style="max-height:180px;overflow-y:auto;margin-bottom:16px">
-        ${bankRows}
-      </div>
+    ov.innerHTML =
+      '<div class="panel">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
+      +'<div><div style="font-size:18px;font-weight:900">ÉDITER</div><div style="font-size:12px;color:var(--t2);margin-top:2px">'+base.name+'</div></div>'
+      +'<button id="ep-x" style="background:var(--s2);border:none;color:var(--t2);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer">✕</button>'
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">EXERCICES ('+exList.length+')</div>'
+      +'<div id="ep-cur" style="max-height:200px;overflow-y:auto;margin-bottom:14px">'+curHTML+'</div>'
+      +'<div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">AJOUTER</div>'
+      +'<div id="ep-add" style="max-height:170px;overflow-y:auto;margin-bottom:16px">'+addHTML+'</div>'
+      +'<button id="ep-save" style="width:100%;background:#00e5a0;color:#000;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:900;cursor:pointer">ENREGISTRER</button>'
+      +'</div>';
 
-      <button style="width:100%;background:#00e5a0;color:#000;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:900;cursor:pointer" id="ep-save">ENREGISTRER</button>
-    </div>`;
-
-    // Bind events
-    ov.querySelector('#ep-close').onclick = () => ov.remove();
-    ov.querySelector('#ep-save').onclick = () => {
-      if(!exList.length){alert('Ajoute au moins un exercice');return;}
-      // Save: if preset → make user copy, if user prog → update
+    ov.querySelector('#ep-x').onclick = function(){ ov.remove(); };
+    ov.querySelector('#ep-save').onclick = function(){
+      if(!exList.length){ alert('Ajoute au moins un exercice'); return; }
       if(PROGS[progId]) {
-        // Create user override copy
-        const copy = {...base, id:'up_'+Date.now(), ex: exList};
-        userProgs = [...userProgs, copy];
-        // Hide the original preset
-        cfg.hidden = [...(cfg.hidden||[]).filter(x=>x!==progId), progId];
-        LS('pt_c', cfg);
+        var copy = Object.assign({},base,{id:'up_'+Date.now(),ex:exList});
+        userProgs = userProgs.concat([copy]);
+        cfg.hidden = (cfg.hidden||[]).filter(function(x){return x!==progId;}).concat([progId]);
+        LS('pt_c',cfg);
       } else {
-        userProgs = userProgs.map(p => p.id===progId ? {...p, ex:exList} : p);
+        userProgs = userProgs.map(function(p){ return p.id===progId ? Object.assign({},p,{ex:exList}) : p; });
       }
-      LS('pt_p', userProgs);
+      LS('pt_p',userProgs);
       ov.remove();
       view='home'; R();
     };
-
-    ov.addEventListener('click', e => {
-      const btn = e.target.closest('[data-ep-rm],[data-ep-up],[data-ep-dn],[data-ep-add]');
+    ov.querySelector('#ep-cur').onclick = function(e){
+      var btn = e.target.closest('[data-rm],[data-up],[data-dn]');
       if(!btn) return;
-      if(btn.dataset.epRm !== undefined || btn.getAttribute('data-ep-rm') !== null) {
-        const i = +(btn.getAttribute('data-ep-rm'));
-        exList.splice(i,1); renderPanel(); return;
-      }
-      if(btn.getAttribute('data-ep-up') !== null) {
-        const i = +(btn.getAttribute('data-ep-up'));
-        if(i>0){[exList[i-1],exList[i]]=[exList[i],exList[i-1]];renderPanel();} return;
-      }
-      if(btn.getAttribute('data-ep-dn') !== null) {
-        const i = +(btn.getAttribute('data-ep-dn'));
-        if(i<exList.length-1){[exList[i],exList[i+1]]=[exList[i+1],exList[i]];renderPanel();} return;
-      }
-      if(btn.getAttribute('data-ep-add') !== null) {
-        const id = btn.getAttribute('data-ep-add');
-        const ex = allBank.find(e=>e.id===id);
-        if(ex){exList.push({...ex});renderPanel();} return;
-      }
-    });
+      var i = parseInt(btn.getAttribute('data-rm')||btn.getAttribute('data-up')||btn.getAttribute('data-dn'));
+      if(btn.hasAttribute('data-rm')){ exList.splice(i,1); }
+      else if(btn.hasAttribute('data-up') && i>0){ var tmp=exList[i-1];exList[i-1]=exList[i];exList[i]=tmp; }
+      else if(btn.hasAttribute('data-dn') && i<exList.length-1){ var tmp2=exList[i];exList[i]=exList[i+1];exList[i+1]=tmp2; }
+      draw();
+    };
+    ov.querySelector('#ep-add').onclick = function(e){
+      var row = e.target.closest('[data-add]');
+      if(!row) return;
+      var id = row.getAttribute('data-add');
+      var ex = bank.find(function(b){ return b.id===id; });
+      if(ex){ exList.push(Object.assign({},ex)); draw(); }
+    };
   }
 
-  // Need allBank accessible in renderPanel closure
-  const allBank = [...EXS, ...(base.ex||[]).filter(e=>!EXS.find(b=>b.id===e.id))];
-
-  renderPanel();
-  document.getElementById('overlays').appendChild(ov);
+  draw();
 }
 
 // ══════════════════ SETTINGS ══════════════════
@@ -971,6 +951,96 @@ function showAddProg() {
     userProgs=[...userProgs,{id:'up_'+Date.now(),name,lbl,col:selCol,ex}];
     LS('pt_p',userProgs);ov.remove();view='home';R();
   };
+}
+
+// ══════════════════ IN-SESSION EXERCISE MANAGEMENT ══════════════════
+function removeSessionEx(xi) {
+  if(!sess) return;
+  if(!confirm('Supprimer "'+sess.ex[xi].nm+'" de la séance ?')) return;
+  sess.ex.splice(xi, 1);
+  expandedEx = new Set([...expandedEx].filter(x=>x!==xi).map(x=>x>xi?x-1:x));
+  saveDraft(); R();
+}
+
+function showAddSessionEx() {
+  if(!sess) return;
+  const usedIds = new Set(sess.ex.map(e=>e.id));
+  const bank = EX_BANK.concat(
+    Object.values(allProgs(true)).flatMap(p=>p.ex||[]).filter(e=>!EX_BANK.find(b=>b.id===e.id))
+  );
+  const p = allProgs()[sess.tpl]||{col:'#00e5a0'};
+
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+
+  function drawAddEx() {
+    const available = bank.filter(e=>!usedIds.has(e.id));
+    const rows = available.map(e=>
+      '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:10px;background:var(--s2);border:1px solid var(--bd);margin-bottom:5px;cursor:pointer" data-addex="'+e.id+'">'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:13px;font-weight:700">'+e.nm+'</div>'
+      +'<div style="font-size:10px;color:var(--t3)">'+e.mu+' · '+e.ns+'×'+e.rp+(e.rt>0?' · '+fmtD(e.rt):'')+'</div>'
+      +'</div>'
+      +'<span style="color:'+p.col+';font-size:20px;flex-shrink:0">＋</span>'
+      +'</div>'
+    ).join('');
+
+    // Replace exercises section
+    const replRows = sess.ex.map((ex,xi)=>
+      '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--s3);border:1px solid var(--bd);margin-bottom:4px">'
+      +'<div style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+ex.nm+'</div>'
+      +'<select style="background:var(--s2);border:1px solid var(--bd);color:var(--t1);border-radius:6px;padding:4px 6px;font-size:11px;cursor:pointer" data-replsel="'+xi+'">'
+      +'<option value="">— Remplacer par —</option>'
+      +bank.map(b=>'<option value="'+b.id+'">'+b.nm+'</option>').join('')
+      +'</select>'
+      +'</div>'
+    ).join('');
+
+    ov.innerHTML =
+      '<div class="panel">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
+      +'<div style="font-size:18px;font-weight:900">MODIFIER LA SÉANCE</div>'
+      +'<button id="ae-x" style="background:var(--s2);border:none;color:var(--t2);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer">✕</button>'
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">AJOUTER UN EXERCICE</div>'
+      +'<div style="max-height:200px;overflow-y:auto;margin-bottom:16px">'+rows+'</div>'
+      +'<div style="font-size:11px;color:var(--t3);margin-bottom:8px;letter-spacing:.06em">REMPLACER UN EXERCICE</div>'
+      +'<div style="max-height:180px;overflow-y:auto">'+replRows+'</div>'
+      +'</div>';
+
+    ov.querySelector('#ae-x').onclick = function(){ ov.remove(); };
+
+    ov.querySelectorAll('[data-addex]').forEach(function(row){
+      row.onclick = function(){
+        const id = row.getAttribute('data-addex');
+        const ex = bank.find(function(b){ return b.id===id; });
+        if(!ex) return;
+        const newEx = Object.assign({},ex,{sets:mkSets(ex),skipped:false});
+        sess.ex.push(newEx);
+        usedIds.add(id);
+        expandedEx.add(sess.ex.length-1);
+        saveDraft();
+        ov.remove(); R();
+      };
+    });
+
+    ov.querySelectorAll('[data-replsel]').forEach(function(sel){
+      sel.onchange = function(){
+        const xi = +sel.getAttribute('data-replsel');
+        const newId = sel.value;
+        if(!newId) return;
+        const newEx = bank.find(function(b){ return b.id===newId; });
+        if(!newEx) return;
+        if(!confirm('Remplacer "'+sess.ex[xi].nm+'" par "'+newEx.nm+'" ?')){ sel.value=''; return; }
+        sess.ex[xi] = Object.assign({},newEx,{sets:mkSets(newEx),skipped:false});
+        saveDraft();
+        ov.remove(); R();
+      };
+    });
+  }
+
+  drawAddEx();
+  document.getElementById('overlays').appendChild(ov);
 }
 
 // ══════════════════ INIT ══════════════════
